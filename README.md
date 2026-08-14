@@ -70,7 +70,7 @@ jobs:
 | `model` | no | `claude-haiku-4-5` | Bump classification is not a hard task. |
 | `non-shipping-extra` | no | `""` | Extra regex alternatives, e.g. `(^research/)`. Fallback path only. |
 | `tag-prefix` | no | `v` | |
-| `build-workflow` | no | `""` | Dispatched after release; empty to skip. |
+| `build-workflow` | no | `""` | Workflow(s) dispatched after release, whitespace-separated; empty to skip. |
 | `dry-run` | no | `false` | Decide and print notes, create nothing. |
 
 ## Outputs
@@ -110,7 +110,8 @@ The calling job must check out **full history with tags** (`fetch-depth: 0`,
 fails fast rather than releasing on a bad diff.
 
 `GITHUB_TOKEN` tag pushes don't trigger workflows. If a tag push is meant to build an
-image, pass `build-workflow` and the action dispatches it explicitly.
+image, pass `build-workflow` and the action dispatches it explicitly. Pass several
+(whitespace- or newline-separated) when one release drives more than one build.
 
 ## Development
 

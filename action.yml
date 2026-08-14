@@ -49,9 +49,10 @@ inputs:
     default: "v"
   build-workflow:
     description: >-
-      Workflow file to dispatch after releasing, e.g. "build.yaml". GITHUB_TOKEN tag
-      pushes don't trigger workflows, so a build must be dispatched explicitly. Leave
-      empty to skip.
+      Workflow file(s) to dispatch after releasing, e.g. "build.yaml", or several
+      separated by whitespace/newlines. GITHUB_TOKEN tag pushes don't trigger
+      workflows, so a build must be dispatched explicitly. Leave empty to skip.
+      Each is passed the new version via -f version=<x.y.z>.
     required: false
     default: ""
   dry-run:
@@ -154,7 +155,8 @@ runs:
           echo "version=$new"
           echo "released=true"
         } >> "$GITHUB_OUTPUT"
-        # GITHUB_TOKEN tag pushes don't trigger workflows, so dispatch the build.
-        if [ -n "$BUILD_WORKFLOW" ]; then
-          gh workflow run "$BUILD_WORKFLOW" --ref "$new" -f version="${new#"$PREFIX"}"
-        fi
+        # GITHUB_TOKEN tag pushes don't trigger workflows, so dispatch the builds.
+        for wf in $BUILD_WORKFLOW; do
+          echo "Dispatching $wf for $new"
+          gh workflow run "$wf" --ref "$new" -f version="${new#"$PREFIX"}"
+        done
