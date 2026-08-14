@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python tests/test_propose_release.py
+
+  # Exercises the composite action end to end against this repo's own history,
+  # with dry-run on so it decides a bump and writes notes without tagging.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: release
+        uses: ./
+        with:
+          dry-run: "true"
+          project-description: >-
+            A composite GitHub Action that decides semver bumps. Everything outside
+            docs/ and tests/ ships to consumers of the action.
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - run: echo "bump=${{ steps.release.outputs.bump }}"

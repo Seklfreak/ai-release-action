@@ -1,0 +1,160 @@
+name: "AI Release"
+description: >-
+  Decide the next semver bump with Claude, tag it, publish a GitHub release with
+  generated notes, and optionally dispatch an image build.
+author: "Seklfreak"
+
+branding:
+  icon: tag
+  color: blue
+
+inputs:
+  project-description:
+    description: >-
+      What this project is and, critically, which paths actually ship to users.
+      Required: the classifier decides "does this reach a user?" against this text,
+      so a wrong or missing description silently suppresses real releases.
+    required: true
+  anthropic-api-key:
+    description: >-
+      Anthropic API key. If omitted the action still works, falling back to a patch
+      bump for any change touching a shipping path.
+    required: false
+    default: ""
+  sha:
+    description: "Commit to release. Defaults to the triggering commit."
+    required: false
+    default: ${{ github.sha }}
+  github-token:
+    description: "Token used to push the tag and create the release."
+    required: false
+    default: ${{ github.token }}
+  project-name:
+    description: "Project name used in the prompt. Defaults to the repository name."
+    required: false
+    default: ""
+  model:
+    description: "Anthropic model for the bump decision."
+    required: false
+    default: "claude-haiku-4-5"
+  non-shipping-extra:
+    description: >-
+      Extra regex alternatives for repo-specific non-shipping paths, e.g.
+      "(^research/)|(^smoketest/)". Used only on the no-API fallback path.
+    required: false
+    default: ""
+  tag-prefix:
+    description: "Prefix for version tags."
+    required: false
+    default: "v"
+  build-workflow:
+    description: >-
+      Workflow file to dispatch after releasing, e.g. "build.yaml". GITHUB_TOKEN tag
+      pushes don't trigger workflows, so a build must be dispatched explicitly. Leave
+      empty to skip.
+    required: false
+    default: ""
+  dry-run:
+    description: "Decide the bump and write notes, but create no tag or release."
+    required: false
+    default: "false"
+
+outputs:
+  bump:
+    description: "The chosen bump: major, minor, patch, or none."
+    value: ${{ steps.decide.outputs.bump }}
+  version:
+    description: "The new version tag (empty when nothing was released)."
+    value: ${{ steps.release.outputs.version }}
+  released:
+    description: "true when a tag and release were created."
+    value: ${{ steps.release.outputs.released }}
+
+runs:
+  using: composite
+  steps:
+    # The bump decision reads the commit range since the last tag, so a shallow
+    # checkout silently yields the wrong answer. Fail loudly instead.
+    - name: Check history and tags
+      shell: bash
+      run: |
+        if [ "$(git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::error::Shallow checkout. This action needs full history and tags —" \
+               "use actions/checkout with fetch-depth: 0 and fetch-tags: true."
+          exit 1
+        fi
+        if [ -z "$(git -C "$GITHUB_WORKSPACE" tag -l)" ]; then
+          echo "::warning::No tags found; treating this as the first release."
+        fi
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+
+    - name: Install anthropic
+      shell: bash
+      run: pip install --quiet anthropic
+
+    - name: Decide bump + notes
+      id: decide
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        PROJECT_DESCRIPTION: ${{ inputs.project-description }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        RELEASE_MODEL: ${{ inputs.model }}
+        NON_SHIPPING_EXTRA: ${{ inputs.non-shipping-extra }}
+        HEAD_SHA: ${{ inputs.sha }}
+        PREFIX: ${{ inputs.tag-prefix }}
+      run: |
+        last=$(git tag -l "${PREFIX}*.*.*" | sort -V | tail -1)
+        bump=$(python "${{ github.action_path }}/propose_release.py" "$last")
+        {
+          echo "bump=$bump"
+          echo "last=${last:-${PREFIX}0.0.0}"
+        } >> "$GITHUB_OUTPUT"
+        echo "Proposed bump: $bump (from ${last:-none})"
+
+    - name: Tag, publish release, dispatch build
+      id: release
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SHA: ${{ inputs.sha }}
+        BUMP: ${{ steps.decide.outputs.bump }}
+        LAST: ${{ steps.decide.outputs.last }}
+        PREFIX: ${{ inputs.tag-prefix }}
+        BUILD_WORKFLOW: ${{ inputs.build-workflow }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "released=false" >> "$GITHUB_OUTPUT"
+        if [ "$BUMP" = "none" ]; then
+          echo "These changes don't warrant a release; skipping."
+          exit 0
+        fi
+        ver=${LAST#"$PREFIX"}; IFS=. read -r ma mi pa <<< "$ver"
+        case "$BUMP" in
+          major) new="${PREFIX}$((ma + 1)).0.0" ;;
+          minor) new="${PREFIX}${ma}.$((mi + 1)).0" ;;
+          *)     new="${PREFIX}${ma}.${mi}.$((pa + 1))" ;;
+        esac
+        echo "Releasing $new (bump=$BUMP) at ${SHA:0:7}"
+        jq -r .notes release.json > notes.md
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "Dry run; no tag or release created. Notes would be:"
+          cat notes.md
+          exit 0
+        fi
+        git tag "$new" "$SHA"
+        git push origin "$new"
+        gh release create "$new" --target "$SHA" --title "$new" --notes-file notes.md
+        {
+          echo "version=$new"
+          echo "released=true"
+        } >> "$GITHUB_OUTPUT"
+        # GITHUB_TOKEN tag pushes don't trigger workflows, so dispatch the build.
+        if [ -n "$BUILD_WORKFLOW" ]; then
+          gh workflow run "$BUILD_WORKFLOW" --ref "$new" -f version="${new#"$PREFIX"}"
+        fi
