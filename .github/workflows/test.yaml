@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: "3.14"
       - run: python tests/test_propose_release.py
+      - run: python tests/test_dispatch_builds.py
 
   # Exercises the composite action end to end against this repo's own history,
   # with dry-run on so it decides a bump and writes notes without tagging.

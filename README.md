@@ -70,7 +70,7 @@ jobs:
 | `model` | no | `claude-haiku-4-5` | Bump classification is not a hard task. |
 | `non-shipping-extra` | no | `""` | Extra regex alternatives, e.g. `(^research/)`. Fallback path only. |
 | `tag-prefix` | no | `v` | |
-| `build-workflow` | no | `""` | Workflow(s) dispatched after release, whitespace-separated; empty to skip. |
+| `build-workflow` | no | `""` | Workflow(s) dispatched after release, whitespace-separated; empty to skip. An entry may carry a `:regex` path filter — see below. |
 | `dry-run` | no | `false` | Decide and print notes, create nothing. |
 
 ## Outputs
@@ -113,11 +113,38 @@ fails fast rather than releasing on a bad diff.
 image, pass `build-workflow` and the action dispatches it explicitly. Pass several
 (whitespace- or newline-separated) when one release drives more than one build.
 
+## Dispatching only the builds a release actually changed
+
+A repo that ships more than one artifact rarely changes both in the same release. A
+`build-workflow` entry may carry a path filter after a colon, and is then dispatched
+only when the released commit range touches a matching file:
+
+```yaml
+build-workflow: |
+  build.yaml
+  testflight.yaml:^ios/
+```
+
+Here a backend-only release builds the image and leaves the unchanged iOS app alone —
+which saves a macOS runner, and, more usefully, saves the testers a build notification
+and Apple a review of an app nobody touched. Entries without a filter always dispatch,
+so this changes nothing for existing callers.
+
+The filter is an ERE matched against paths relative to the repo root, and must contain
+no whitespace (entries are whitespace-separated). Anchor it: `^ios/` and not `ios/`,
+or it fires on `backend/ios/`. Skips are announced as workflow notices, because the
+failure mode of a filter that never matches is a build that silently stops happening.
+
+Filtering is skipped when the previous tag doesn't exist — on a first release there is
+no baseline to diff against, so everything is dispatched.
+
 ## Development
 
 ```sh
 python3 tests/test_propose_release.py
+python3 tests/test_dispatch_builds.py
 ```
 
 The tests build throwaway git repos and assert the fallback classification, including
-a regression test for the embedded-asset case that caused this extraction.
+a regression test for the embedded-asset case that caused this extraction, and the
+build-dispatch filtering against a fake `gh`.

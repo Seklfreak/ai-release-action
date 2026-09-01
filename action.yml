@@ -53,6 +53,12 @@ inputs:
       separated by whitespace/newlines. GITHUB_TOKEN tag pushes don't trigger
       workflows, so a build must be dispatched explicitly. Leave empty to skip.
       Each is passed the new version via -f version=<x.y.z>.
+
+      An entry may carry a path filter after a colon — "testflight.yaml:^ios/" —
+      and is then dispatched only when the released commit range touches a file
+      matching that regex (ERE, no whitespace, paths relative to the repo root).
+      Use it to keep a release from rebuilding an artifact none of its commits
+      changed; unfiltered entries always dispatch.
     required: false
     default: ""
   dry-run:
@@ -156,7 +162,5 @@ runs:
           echo "released=true"
         } >> "$GITHUB_OUTPUT"
         # GITHUB_TOKEN tag pushes don't trigger workflows, so dispatch the builds.
-        for wf in $BUILD_WORKFLOW; do
-          echo "Dispatching $wf for $new"
-          gh workflow run "$wf" --ref "$new" -f version="${new#"$PREFIX"}"
-        done
+        bash "${{ github.action_path }}/dispatch_builds.sh" \
+          "$new" "${new#"$PREFIX"}" "$LAST" "$SHA"
