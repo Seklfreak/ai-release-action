@@ -37,8 +37,28 @@ class Repo:
         self.bin = Path(self.dir) / ".fakebin"
         self.bin.mkdir()
         self.log = Path(self.dir) / "gh.log"
+        # The fake fails the first FAIL_RUNS `workflow run` calls the way
+        # GitHub does when its API hiccups, and answers `run list` with a run
+        # id when RUN_EXISTS is set -- the two halves of a dispatch that has
+        # to be verified rather than trusted.
+        self.fail_file = Path(self.dir) / "fail-runs"
         gh = self.bin / "gh"
-        gh.write_text(f'#!/bin/sh\necho "$*" >> "{self.log}"\n')
+        gh.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.log}"\n'
+            'case "$1 $2" in\n'
+            '  "workflow run")\n'
+            f'    n=$(cat "{self.fail_file}" 2>/dev/null || echo 0)\n'
+            '    if [ "$n" -gt 0 ]; then\n'
+            f'      echo $((n - 1)) > "{self.fail_file}"\n'
+            '      echo "could not create workflow dispatch event: HTTP 500" >&2\n'
+            "      exit 1\n"
+            "    fi ;;\n"
+            '  "run list")\n'
+            '    [ "${FAKE_GH_RUN_EXISTS:-}" = 1 ] && echo 4242 ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
         gh.chmod(0o755)
 
     def commit(self, path, content, message):
@@ -48,11 +68,16 @@ class Repo:
         git(self.dir, "add", "-A")
         git(self.dir, "commit", "-q", "-m", message)
 
-    def run(self, build_workflow, base="v1.0.0", ref="v1.1.0"):
-        """Dispatch as the action would, and return (dispatched, stderr)."""
+    def run(self, build_workflow, base="v1.0.0", ref="v1.1.0", fail_runs=0, run_exists=False):
+        """Dispatch as the action would, and return (dispatched, result).
+
+        `dispatched` lists the workflow of every `gh workflow run` attempt, in
+        order, so a retry shows up as a repeat.
+        """
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=self.dir, capture_output=True, text=True
         ).stdout.strip()
+        self.fail_file.write_text(str(fail_runs))
         p = subprocess.run(
             ["bash", str(SCRIPT), ref, ref.lstrip("v"), base, head],
             cwd=self.dir,
@@ -62,10 +87,12 @@ class Repo:
                 **os.environ,
                 "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                 "BUILD_WORKFLOW": build_workflow,
+                "DISPATCH_RETRY_DELAY": "0",
+                "FAKE_GH_RUN_EXISTS": "1" if run_exists else "",
             },
         )
         calls = self.log.read_text().splitlines() if self.log.exists() else []
-        return [c.split()[2] for c in calls], p
+        return [c.split()[2] for c in calls if c.startswith("workflow run ")], p
 
 
 class TestDispatchBuilds(unittest.TestCase):
@@ -110,6 +137,27 @@ class TestDispatchBuilds(unittest.TestCase):
         self.repo.commit("backend/ios/notes.go", "package ios", "backend")
         got, _ = self.repo.run("testflight.yaml:^ios/")
         self.assertEqual(got, [])
+
+    def test_a_dispatch_error_after_the_run_was_created_is_not_a_failure(self):
+        """GitHub answered a 500 with the TestFlight run already on its way,
+        and the release went red with everything built. The run is what
+        counts, not the answer."""
+        got, p = self.repo.run("build.yaml testflight.yaml", fail_runs=1, run_exists=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(got, ["build.yaml", "testflight.yaml"])
+        self.assertIn("running for v1.1.0 after all", p.stdout)
+
+    def test_a_dispatch_error_with_no_run_is_retried(self):
+        got, p = self.repo.run("build.yaml", fail_runs=1)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(got, ["build.yaml", "build.yaml"])
+
+    def test_a_dispatch_that_never_lands_fails_the_release(self):
+        """A release without its build must not pass quietly."""
+        got, p = self.repo.run("build.yaml", fail_runs=5)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(got, ["build.yaml"] * 3)
+        self.assertIn("Could not dispatch build.yaml", p.stdout)
 
     def test_no_build_workflow_dispatches_nothing(self):
         self.repo.commit("ios/App.swift", "import SwiftUI", "ios")

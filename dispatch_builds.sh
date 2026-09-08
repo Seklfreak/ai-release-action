@@ -15,15 +15,50 @@
 # A skip is announced as a workflow notice: the failure mode of a wrong filter
 # is a build that silently never ships, so it must be visible in the run log.
 #
+# A dispatch is checked, not trusted. GitHub has answered `gh workflow run`
+# with a 500 *after* creating the run, and the release job went red with
+# every build already on its way; the opposite -- an error and no run -- would
+# leave a release without its build. So on an error the script looks for a
+# run of that workflow on the released ref before deciding: found, carry on;
+# not found, try again, a few times, and only then fail.
+#
 # Usage: dispatch_builds.sh <ref> <version> <base> <head>
-# Env:   BUILD_WORKFLOW  the entries; empty means dispatch nothing
-#        GH_TOKEN        token for `gh workflow run`
+# Env:   BUILD_WORKFLOW        the entries; empty means dispatch nothing
+#        GH_TOKEN              token for `gh workflow run`
+#        DISPATCH_RETRY_DELAY  seconds between attempts (default 10; tests set 0)
 set -euo pipefail
 
 REF=$1        # tag to dispatch against, e.g. v1.2.3
 VERSION=$2    # same without the prefix, passed as -f version=
 BASE=$3       # previous tag; may not exist on a first release
 HEAD_SHA=$4   # the released commit
+RETRY_DELAY=${DISPATCH_RETRY_DELAY:-10}
+ATTEMPTS=3
+
+# run_exists <workflow>: whether a dispatched run of it is on the released ref.
+run_exists() {
+  [ -n "$(gh run list --workflow "$1" --branch "$REF" --event workflow_dispatch \
+            --limit 1 --json databaseId --jq '.[].databaseId')" ]
+}
+
+# dispatch <workflow>: `gh workflow run`, verified as described above.
+dispatch() {
+  local wf=$1 attempt
+  for attempt in $(seq 1 "$ATTEMPTS"); do
+    if gh workflow run "$wf" --ref "$REF" -f version="$VERSION"; then
+      return 0
+    fi
+    echo "::warning::Dispatching $wf for $REF failed (attempt $attempt of $ATTEMPTS); checking whether the run exists anyway."
+    # A run takes a moment to show up after its event.
+    sleep "$RETRY_DELAY"
+    if run_exists "$wf"; then
+      echo "$wf is running for $REF after all; carrying on."
+      return 0
+    fi
+  done
+  echo "::error::Could not dispatch $wf for $REF after $ATTEMPTS attempts."
+  return 1
+}
 
 for entry in ${BUILD_WORKFLOW:-}; do
   wf=${entry%%:*}
@@ -42,5 +77,5 @@ for entry in ${BUILD_WORKFLOW:-}; do
   fi
 
   echo "Dispatching $wf for $REF"
-  gh workflow run "$wf" --ref "$REF" -f version="$VERSION"
+  dispatch "$wf"
 done

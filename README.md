@@ -113,6 +113,11 @@ fails fast rather than releasing on a bad diff.
 image, pass `build-workflow` and the action dispatches it explicitly. Pass several
 (whitespace- or newline-separated) when one release drives more than one build.
 
+A dispatch is checked, not trusted: GitHub has answered the dispatch call with a 500
+*after* creating the run. On an error the action looks for a run of that workflow on
+the released tag — found, it carries on; not found, it tries again, three times in
+all, and only then fails the release.
+
 ## Dispatching only the builds a release actually changed
 
 A repo that ships more than one artifact rarely changes both in the same release. A
