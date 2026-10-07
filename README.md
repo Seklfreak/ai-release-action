@@ -67,7 +67,7 @@ jobs:
 | `sha` | no | `github.sha` | Commit to release. |
 | `github-token` | no | `github.token` | Needs `contents: write`. |
 | `project-name` | no | repo name | Name used in the prompt. |
-| `model` | no | `claude-haiku-4-5` | Bump classification is not a hard task. |
+| `model` | no | `claude-haiku-5-5` | Bump classification is not a hard task. |
 | `non-shipping-extra` | no | `""` | Extra regex alternatives, e.g. `(^research/)`. Fallback path only. |
 | `tag-prefix` | no | `v` | |
 | `build-workflow` | no | `""` | Workflow(s) dispatched after release, whitespace-separated; empty to skip. An entry may carry a `:regex` path filter — see below. |

@@ -15,7 +15,7 @@ Env:   PROJECT_DESCRIPTION (required)  what the project is and what ships
        PROJECT_NAME                    defaults to the GITHUB_REPOSITORY name
        ANTHROPIC_API_KEY               absent -> fallback path, never blocks
        HEAD_SHA                        defaults to HEAD
-       RELEASE_MODEL                   defaults to claude-haiku-4-5
+       RELEASE_MODEL                   defaults to claude-haiku-5-5
        NON_SHIPPING_EXTRA              extra regex alternatives, e.g. "(^research/)"
        RELEASE_JSON                    output path, defaults to release.json
 """
@@ -152,8 +152,11 @@ Call propose_release with the bump and concise, user-facing markdown notes."""
     client = anthropic.Anthropic()
     msg = client.messages.create(
         # Haiku is plenty for bump-classification + concise notes; override if desired.
-        model=os.environ.get("RELEASE_MODEL", "claude-haiku-4-5"),
-        max_tokens=2000,
+        model=os.environ.get("RELEASE_MODEL", "claude-haiku-5-5"),
+        # Haiku 5.5 thinks by default and the thinking counts against this
+        # budget; at 2000 it could spend it all before the tool call, which
+        # silently lands on the patch fallback below.
+        max_tokens=8000,
         tools=[tool],
         tool_choice={"type": "tool", "name": "propose_release"},
         messages=[{"role": "user", "content": prompt}],

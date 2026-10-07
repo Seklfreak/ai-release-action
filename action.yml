@@ -36,7 +36,7 @@ inputs:
   model:
     description: "Anthropic model for the bump decision."
     required: false
-    default: "claude-haiku-4-5"
+    default: "claude-haiku-5-5"
   non-shipping-extra:
     description: >-
       Extra regex alternatives for repo-specific non-shipping paths, e.g.
